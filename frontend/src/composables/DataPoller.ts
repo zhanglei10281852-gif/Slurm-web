@@ -15,6 +15,7 @@ import {
 } from '@/composables/HTTPErrors'
 import { useGatewayAPI, type GatewayAnyClusterApiKey } from '@/composables/GatewayAPI'
 import { useRuntimeStore } from '@/stores/runtime'
+import { useSessionStore } from '@/stores/session'
 import { useErrorsHandler } from '@/composables/ErrorsHandler'
 
 export interface ClusterDataPoller<ResponseType> {
@@ -47,6 +48,7 @@ export function useClusterDataPoller<Type>(
   let _pollGeneration = 0
   const gateway = useGatewayAPI()
   const runtime = useRuntimeStore()
+  const session = useSessionStore()
   const { reportAuthenticationError, reportPermissionError } = useErrorsHandler()
   let _timeout: number = -1
 
@@ -128,11 +130,17 @@ export function useClusterDataPoller<Type>(
     start()
   }
 
+  let unregisterPoller: (() => void) | undefined
+
   onMounted(() => {
+    /* Register the stopper so a session invalidation (logout/401) stops this
+     * poller synchronously, before navigation unmounts the component. */
+    unregisterPoller = session.registerPoller(stop)
     start()
   })
   onUnmounted(() => {
     stop()
+    unregisterPoller?.()
   })
 
   return { data, unable, loaded, setCluster, setCallback, setParam }

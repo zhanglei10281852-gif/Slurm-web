@@ -243,8 +243,19 @@ router.beforeEach(async (to, from) => {
   runtime.routePath = to.path as string
 
   if (to.params.cluster) {
-    if (!runtime.currentCluster || to.params.cluster !== runtime.currentCluster.name) {
-      runtime.currentCluster = runtime.getCluster(to.params.cluster as string)
+    const clusterName = to.params.cluster as string
+    /* The route cluster must belong to the cluster permission snapshot of the
+     * current session. After a login (or a refresh without an attributable
+     * snapshot) the snapshot is still empty: bounce to the clusters page,
+     * which atomically publishes the current session clusters before any
+     * permission check, menu or page data can be driven by another user's
+     * snapshot. The requested route is retained for post-load redirection. */
+    if (!runtime.checkClusterAvailable(clusterName)) {
+      auth.returnUrl = to.fullPath
+      return { name: 'clusters' }
+    }
+    if (!runtime.currentCluster || clusterName !== runtime.currentCluster.name) {
+      runtime.currentCluster = runtime.getCluster(clusterName)
       console.log(
         `New cluster ${runtime.currentCluster?.name} permissions: ${runtime.currentCluster?.permissions.actions}`
       )

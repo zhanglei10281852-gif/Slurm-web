@@ -11,8 +11,9 @@ import { onMounted, ref, computed } from 'vue'
 import type { Ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useRuntimeStore } from '@/stores/runtime'
+import { useAuthStore } from '@/stores/auth'
 import { useRuntimeConfiguration } from '@/plugins/runtimeConfiguration'
-import { AuthenticationError } from '@/composables/HTTPErrors'
+import { AuthenticationError, CanceledRequestError } from '@/composables/HTTPErrors'
 import { useErrorsHandler } from '@/composables/ErrorsHandler'
 import ClusterListItem from '@/components/clusters/ClustersListItem.vue'
 import LoadingSpinner from '@/components/LoadingSpinner.vue'
@@ -23,6 +24,7 @@ import { useGatewayAPI } from '@/composables/GatewayAPI'
 import { type ClusterDescription } from '@/composables/gateway/types/cluster'
 
 const runtimeStore = useRuntimeStore()
+const authStore = useAuthStore()
 const runtimeConfiguration = useRuntimeConfiguration()
 const gateway = useGatewayAPI()
 const { reportAuthenticationError, reportServerError } = useErrorsHandler()
@@ -40,25 +42,54 @@ const clusterWithError = computed(() => {
   return clusters.value.find((cluster) => cluster.error)
 })
 
+/*
+ * After login the router may bounce a saved cluster URL back here because the
+ * current session snapshot was still empty. Once the current session cluster
+ * list has been successfully published, resume that URL when its cluster is
+ * available and allowed in this session. Anything else is dropped rather than
+ * served from a previous user's permissions.
+ */
+function consumePostLoginRoute(allowedClusterNames: Array<string>): boolean {
+  if (authStore.returnUrl === null) return false
+  const target = authStore.returnUrl
+  const resolved = router.resolve(target)
+  const targetCluster = resolved.params.cluster as string | undefined
+  if (targetCluster !== undefined && !allowedClusterNames.includes(targetCluster)) {
+    /* Target cluster is unknown or denied in the current session. */
+    authStore.returnUrl = null
+    return false
+  }
+  router.push(authStore.takePostLoginRoute())
+  return true
+}
+
 async function getClustersDescriptions() {
   try {
-    clusters.value = await gateway.clusters()
-    runtimeStore.availableClusters = []
-    clusters.value.forEach((element) => {
-      /* Consider this cluster does not have error at this stage. It could be
-       * set to true if stats retrieval fail later on.
-       */
+    const descriptions = await gateway.clusters()
+    /* Consider this cluster does not have error at this stage. It could be
+     * set to true if stats retrieval fail later on.
+     */
+    descriptions.forEach((element) => {
       element.error = false
-      runtimeStore.addCluster(element)
     })
+    /* Atomically publish clusters and permissions of the current session.
+     * The previous (possibly empty) state is replaced only on success: a load
+     * failure keeps the no-permission state and stays retryable instead of
+     * falling back to another user's snapshot. */
+    runtimeStore.setAvailableClusters(descriptions)
+    clusters.value = descriptions
     loaded.value = true
 
     /* Get list of clusters with permissions. If there is only one, set some
      * refs to make handleClusterPing() redirect automatically to the
      * dashboard of this cluster. */
-    const clustersWithPermissions = clusters.value.filter(
+    const clustersWithPermissions = descriptions.filter(
       (cluster) => cluster.permissions.actions.length > 0
     )
+    const allowedClusterNames = clustersWithPermissions.map((cluster) => cluster.name)
+    if (consumePostLoginRoute(allowedClusterNames)) {
+      return
+    }
     if (clustersWithPermissions.length === 1) {
       awaitingAutoRedirect.value = true
       awaitingClusterName.value = clustersWithPermissions[0].name
@@ -66,6 +97,9 @@ async function getClustersDescriptions() {
   } catch (error) {
     if (error instanceof AuthenticationError) {
       reportAuthenticationError(error)
+    } else if (error instanceof CanceledRequestError) {
+      /* Response from an expired session or an aborted request: discard it
+       * without touching state, error notifications or the route. */
     } else if (error instanceof Error) {
       reportServerError(error)
       unable.value = true

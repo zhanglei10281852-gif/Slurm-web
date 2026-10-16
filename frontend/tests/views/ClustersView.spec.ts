@@ -7,8 +7,9 @@ import LoadingSpinner from '@/components/LoadingSpinner.vue'
 import ClusterListItem from '@/components/clusters/ClustersListItem.vue'
 import ErrorAlert from '@/components/ErrorAlert.vue'
 import InfoAlert from '@/components/InfoAlert.vue'
-import { APIServerError, AuthenticationError } from '@/composables/HTTPErrors'
+import { APIServerError, AuthenticationError, CanceledRequestError } from '@/composables/HTTPErrors'
 import { useAuthStore } from '@/stores/auth'
+import { useRuntimeStore } from '@/stores/runtime'
 import { type ClusterDescription } from '@/composables/gateway/types/cluster'
 
 const mockGatewayAPI = {
@@ -24,6 +25,8 @@ let router
 describe('ClustersView.vue', () => {
   beforeEach(() => {
     router = init_plugins()
+    // Do not restore cluster snapshots persisted by previous tests.
+    localStorage.clear()
     // Set current route to /clusters for testing
     router.currentRoute.value.fullPath = '/clusters'
   })
@@ -119,5 +122,27 @@ describe('ClustersView.vue', () => {
     await flushPromises()
     expect(router.push).not.toHaveBeenCalled()
     expect(wrapper.findComponent(ClusterListItem).exists()).toBe(true)
+  })
+  test('atomically publishes clusters and permissions to the runtime store', async () => {
+    mockGatewayAPI.clusters.mockReturnValueOnce(Promise.resolve(clusters))
+    shallowMount(ClustersView)
+    await flushPromises()
+    const runtimeStore = useRuntimeStore()
+    expect(runtimeStore.availableClusters.map((cluster) => cluster.name)).toStrictEqual(
+      clusters.map((cluster) => cluster.name)
+    )
+    expect(localStorage.getItem('availableClusters')).toBeTruthy()
+  })
+  test('discards a stale cluster response without updating state', async () => {
+    // A response coming back from a previous session after a user switch must
+    // be silently dropped: no error alert, no navigation, no snapshot publish.
+    mockGatewayAPI.clusters.mockReturnValueOnce(
+      Promise.reject(new CanceledRequestError('stale session'))
+    )
+    const wrapper = shallowMount(ClustersView)
+    await flushPromises()
+    expect(wrapper.findComponent(ErrorAlert).exists()).toBeFalsy()
+    expect(useRuntimeStore().availableClusters).toStrictEqual([])
+    expect(router.push).not.toHaveBeenCalled()
   })
 })

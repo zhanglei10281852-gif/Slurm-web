@@ -9,7 +9,7 @@
 import { onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useRuntimeStore } from '@/stores/runtime'
-import { AuthenticationError } from '@/composables/HTTPErrors'
+import { AuthenticationError, CanceledRequestError } from '@/composables/HTTPErrors'
 import { useErrorsHandler } from '@/composables/ErrorsHandler'
 import { ChevronRightIcon } from '@heroicons/vue/20/solid'
 import { TagIcon } from '@heroicons/vue/20/solid'
@@ -40,16 +40,20 @@ async function getClustersPing() {
     const response = await gateway.ping(cluster.name)
     cluster.versions = response.versions
   } catch (error) {
-    if (error instanceof AuthenticationError) {
+    if (error instanceof CanceledRequestError) {
+      /* Request aborted by a session switch or its response was discarded:
+       * do not update the cluster state, error notifications or trigger the
+       * single-cluster auto-redirect of the new session. */
+      return
+    } else if (error instanceof AuthenticationError) {
       reportAuthenticationError(error)
     } else if (error instanceof Error) {
       reportServerError(error)
       cluster.error = true
     }
-  } finally {
-    loading.value = false
-    emit('pinged', cluster)
   }
+  loading.value = false
+  emit('pinged', cluster)
 }
 
 onMounted(() => {

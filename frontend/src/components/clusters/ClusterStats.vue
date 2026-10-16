@@ -8,7 +8,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useGatewayAPI } from '@/composables/GatewayAPI'
-import { AuthenticationError } from '@/composables/HTTPErrors'
+import { AuthenticationError, CanceledRequestError } from '@/composables/HTTPErrors'
 import { useErrorsHandler } from '@/composables/ErrorsHandler'
 import { ServerIcon, PlayCircleIcon } from '@heroicons/vue/24/outline'
 import { useRuntimeStore } from '@/stores/runtime'
@@ -26,7 +26,11 @@ async function getClusterStats() {
   try {
     cluster.stats = await gateway.stats(clusterName)
   } catch (err) {
-    if (err instanceof AuthenticationError) {
+    if (err instanceof CanceledRequestError) {
+      /* Aborted on session switch or stale response: never update stats of
+       * another session nor raise an error notification. */
+      return
+    } else if (err instanceof AuthenticationError) {
       reportAuthenticationError(err)
     } else if (err instanceof Error) {
       reportServerError(err)

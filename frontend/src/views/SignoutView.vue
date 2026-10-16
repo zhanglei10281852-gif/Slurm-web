@@ -9,17 +9,20 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
+import { useAuthSession } from '@/composables/AuthSession'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useRuntimeConfiguration } from '@/plugins/runtimeConfiguration'
 
-const authStore = useAuthStore()
+const { terminate } = useAuthSession()
 const runtimeStore = useRuntimeStore()
 const router = useRouter()
 const runtimeConfiguration = useRuntimeConfiguration()
 
 onMounted(() => {
-  authStore.logout()
+  /* Invalidate the session atomically before entering the login flow: stop
+   * pollers, abort in-flight requests and clear credentials together with the
+   * persisted cluster permission snapshot. Safe to call repeatedly. */
+  terminate()
   runtimeStore.reportInfo('You have been signed out')
 
   if (runtimeConfiguration.authentication) {

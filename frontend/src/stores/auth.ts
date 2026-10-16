@@ -10,13 +10,34 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { Ref } from 'vue'
 import type { RouteLocationRaw } from 'vue-router'
+import { SESSION_ID_KEY } from '@/stores/session'
+
+const CREDENTIAL_KEYS = ['token', 'username', 'fullname', 'groups']
+
+function clearStoredCredentials() {
+  CREDENTIAL_KEYS.forEach((key) => localStorage.removeItem(key))
+}
+
+/*
+ * Credentials may be restored only when they are sealed by a persisted session
+ * identifier. Legacy localStorage data (no session id) cannot be attributed to
+ * the current identity: migrate it to a safe empty state instead.
+ */
+function restoreCredential(key: string): string | null {
+  if (localStorage.getItem(SESSION_ID_KEY) === null) return null
+  return localStorage.getItem(key)
+}
 
 export const useAuthStore = defineStore('auth', () => {
-  const token: Ref<string | null> = ref(localStorage.getItem('token'))
-  const username: Ref<string | null> = ref(localStorage.getItem('username'))
-  const fullname: Ref<string | null> = ref(localStorage.getItem('fullname'))
+  if (localStorage.getItem(SESSION_ID_KEY) === null) {
+    clearStoredCredentials()
+  }
+
+  const token: Ref<string | null> = ref(restoreCredential('token'))
+  const username: Ref<string | null> = ref(restoreCredential('username'))
+  const fullname: Ref<string | null> = ref(restoreCredential('fullname'))
   const groups: Ref<Array<string> | null> = ref(
-    JSON.parse(localStorage.getItem('groups') || '[]') as string[]
+    JSON.parse(restoreCredential('groups') || '[]') as string[]
   )
   const returnUrl: Ref<string | null> = ref(null)
 
@@ -40,10 +61,10 @@ export const useAuthStore = defineStore('auth', () => {
 
   function logout() {
     token.value = null
-    localStorage.removeItem('token')
-    localStorage.removeItem('username')
-    localStorage.removeItem('fullname')
-    localStorage.removeItem('groups')
+    username.value = null
+    fullname.value = null
+    groups.value = null
+    clearStoredCredentials()
   }
 
   return { token, username, fullname, groups, returnUrl, setSession, takePostLoginRoute, logout }

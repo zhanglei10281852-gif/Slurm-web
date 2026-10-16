@@ -11,6 +11,7 @@ import { ref } from 'vue'
 import type { Ref } from 'vue'
 import type { RouteLocation } from 'vue-router'
 import type { ClusterDescription } from '@/composables/gateway/types/cluster'
+import { useSessionStore, CLUSTERS_SESSION_ID_KEY } from '@/stores/session'
 import { useDashboardRuntimeStore } from './runtime/dashboard'
 import { useJobsRuntimeStore } from './runtime/jobs'
 import { useResourcesRuntimeStore } from './runtime/resources'
@@ -49,7 +50,31 @@ export interface RuntimeStore {
   reportError: CallableFunction
 }
 
+/*
+ * Restore the persisted cluster permission snapshot only when it is owned by
+ * the current authentication session. Any unattributed or foreign snapshot
+ * (previous user on a shared browser, legacy localStorage data) is migrated to
+ * a safe empty state.
+ */
+function restoreAvailableClusters(currentSessionId: string): Array<ClusterDescription> {
+  const owner = localStorage.getItem(CLUSTERS_SESSION_ID_KEY)
+  const raw = localStorage.getItem('availableClusters')
+  if (owner === null || raw === null || owner !== currentSessionId) {
+    localStorage.removeItem(CLUSTERS_SESSION_ID_KEY)
+    localStorage.removeItem('availableClusters')
+    return []
+  }
+  try {
+    return JSON.parse(raw) as ClusterDescription[]
+  } catch {
+    localStorage.removeItem(CLUSTERS_SESSION_ID_KEY)
+    localStorage.removeItem('availableClusters')
+    return []
+  }
+}
+
 export const useRuntimeStore = defineStore('runtime', () => {
+  const session = useSessionStore()
   const routePath: Ref<string> = ref('/')
   const beforeSettingsRoute: Ref<RouteLocation | undefined> = ref(undefined)
 
@@ -61,13 +86,41 @@ export const useRuntimeStore = defineStore('runtime', () => {
   const notifications: Ref<Array<Notification>> = ref([])
 
   const availableClusters: Ref<Array<ClusterDescription>> = ref(
-    JSON.parse(localStorage.getItem('availableClusters') || '[]') as ClusterDescription[]
+    restoreAvailableClusters(session.sessionId)
   )
-  const currentCluster: Ref<ClusterDescription | undefined> = ref()
+  const currentCluster: Ref<ClusterDescription | undefined> = ref(undefined)
+
+  function persistAvailableClusters() {
+    localStorage.setItem(CLUSTERS_SESSION_ID_KEY, session.sessionId)
+    localStorage.setItem('availableClusters', JSON.stringify(availableClusters.value))
+  }
+
+  /*
+   * Atomically publish the cluster list and its permissions for the current
+   * session. Callers must only invoke this after a successful cluster list
+   * response from the current session, so a failed load keeps the previous
+   * safe empty state instead of falling back to another user's data.
+   */
+  function setAvailableClusters(clusters: Array<ClusterDescription>) {
+    availableClusters.value = clusters
+    persistAvailableClusters()
+  }
 
   function addCluster(cluster: ClusterDescription) {
     availableClusters.value.push(cluster)
-    localStorage.setItem('availableClusters', JSON.stringify(availableClusters.value))
+    persistAvailableClusters()
+  }
+
+  /*
+   * Remove every cluster and permission of the invalidated session and detach
+   * the current cluster so route permission checks and the menu cannot be
+   * driven by a stale snapshot.
+   */
+  function clearAvailableClusters() {
+    availableClusters.value = []
+    currentCluster.value = undefined
+    localStorage.removeItem(CLUSTERS_SESSION_ID_KEY)
+    localStorage.removeItem('availableClusters')
   }
 
   function getCluster(name: string): ClusterDescription {
@@ -132,7 +185,9 @@ export const useRuntimeStore = defineStore('runtime', () => {
     notifications,
     availableClusters,
     currentCluster,
+    setAvailableClusters,
     addCluster,
+    clearAvailableClusters,
     getCluster,
     getAllowedClusters,
     checkClusterAvailable,

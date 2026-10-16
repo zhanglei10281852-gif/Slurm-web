@@ -104,6 +104,9 @@ export function useClusterDataGetter<Type>(
       } else if (error instanceof PermissionError) {
         reportPermissionError(error)
         unable.value = true
+      } else if (error instanceof CanceledRequestError) {
+        /* Ignore canceled requests and responses discarded after a session
+         * switch: they must not update state or error notifications. */
       } else if (error instanceof Error) {
         reportOtherError(error)
       }
